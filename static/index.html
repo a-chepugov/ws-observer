@@ -6,10 +6,63 @@
 </head>
 <body>
 <script>
-	var HOST = location.origin.replace(/^http/, 'ws');
-	var socket = new WebSocket(HOST);
-	socket.onmessage = console.info;
+	var origin = location.origin.replace(/^http/, 'ws');
+	const id = '/sadfasdf/';
+	var socket = new WebSocket(origin + id);
 	window.socket = socket;
+
+	let connection = 0;
+
+	function onConnect(payload) {
+		return connection = payload.id;
+	}
+
+	function sendObject(payload) {
+		return this.send(JSON.stringify(payload));
+	}
+
+	function checkRoom() {
+		return sendObject.call(socket, {type: 'room.exist', payload: {id}});
+	}
+
+	function createRoom(payload) {
+		return sendObject.call(socket, {type: 'room.create', payload});
+	}
+
+	function enterRoom(payload) {
+		return sendObject.call(socket, {type: 'room.enter', payload});
+	}
+
+	function broadcast(payload) {
+		return sendObject.call(socket, {type: 'room.broadcast', payload: Object.assign({message: (new Date()).toISOString()}, payload)});
+	}
+
+	const secret = 123;
+
+	function messageHandler(message) {
+		switch (message.type) {
+			case 'connected':
+				onConnect(message.payload);
+				return checkRoom();
+			case 'room.exist':
+				return message.payload ? enterRoom({id, secret, connection: {id: connection}}) : createRoom({secret});
+			case 'room.created':
+				return enterRoom(Object.assign(message.payload, {connection: {id: connection}}));
+			case 'room.entered':
+				return broadcast(message.payload);
+			case 'room.broadcasted':
+				return console.log('DEBUG:index.html(messageHandler):42 =>', message.payload);
+			default:
+				throw new Error('Unknown type: ' + message.type);
+		}
+	}
+
+	socket.onopen = function (event) {
+		socket.onmessage = function (msg) {
+			return messageHandler(JSON.parse(msg.data));
+		};
+	};
+
 </script>
 </body>
 </html>
