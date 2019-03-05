@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>websocket</title>
+</head>
+<body>
+<script>
+	var HOST = location.origin.replace(/^http/, 'ws');
+	var socket = new WebSocket(HOST);
+	socket.onmessage = console.info;
+	window.socket = socket;
+</script>
+</body>
+</html>
