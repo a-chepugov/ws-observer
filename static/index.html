@@ -7,51 +7,60 @@
 <body>
 <script>
 	var origin = location.origin.replace(/^http/, 'ws');
-	const id = '/sadfasdf/';
-	var socket = new WebSocket(origin + id);
+	var socket = new WebSocket(origin);
 	window.socket = socket;
 
-	let connection = 0;
+	const room = {id: 'bino', secret: '12ss3d'};
 
-	function onConnect(payload) {
-		return connection = payload.id;
-	}
+	const connection = {id: 0};
 
 	function sendObject(payload) {
 		return this.send(JSON.stringify(payload));
 	}
 
-	function checkRoom() {
-		return sendObject.call(socket, {type: 'room.exist', payload: {id}});
+	function onConnect(payload) {
+		connection.id = payload.id;
+		return checkRoomExist({room});
+	}
+
+	function checkRoomExist(payload) {
+		return sendObject.call(socket, {type: '?room.exist', payload});
+	}
+
+	function onRoomExist(payload) {
+		return payload ? enterRoom({room, connection}) : createRoom({room});
 	}
 
 	function createRoom(payload) {
-		return sendObject.call(socket, {type: 'room.create', payload});
+		return sendObject.call(socket, {type: '?room.create', payload});
 	}
 
 	function enterRoom(payload) {
-		return sendObject.call(socket, {type: 'room.enter', payload});
+		return sendObject.call(socket, {type: '?room.enter', payload});
 	}
 
 	function broadcast(payload) {
-		return sendObject.call(socket, {type: 'room.broadcast', payload: Object.assign({message: (new Date()).toISOString()}, payload)});
+		return sendObject.call(socket, {type: '?room.broadcast', payload: Object.assign({message: (new Date()).toISOString()}, payload)});
 	}
-
-	const secret = 123;
 
 	function messageHandler(message) {
 		switch (message.type) {
-			case 'connected':
-				onConnect(message.payload);
-				return checkRoom();
-			case 'room.exist':
-				return message.payload ? enterRoom({id, secret, connection: {id: connection}}) : createRoom({secret});
-			case 'room.created':
-				return enterRoom(Object.assign(message.payload, {connection: {id: connection}}));
-			case 'room.entered':
-				return broadcast(message.payload);
-			case 'room.broadcasted':
-				return console.log('DEBUG:index.html(messageHandler):42 =>', message.payload);
+			case '!connect':
+				// return broadcast({room})
+				return onConnect(message.payload);
+			case '!room.exist':
+				return onRoomExist(message.payload);
+			case '!room.create':
+			// 	// @todo Абшика тута
+				console.log('DEBUG:index.html(messageHandler):53 =>', message);
+				return enterRoom(message.payload);
+			case '!room.enter':
+				console.log('DEBUG:index.html(messageHandler):55 =>', message);
+				return message.payload === true ?
+					broadcast(Object.assign({room}, {message: (new Date()).toISOString()})) :
+					console.error(message.payload);
+			case '!room.broadcast':
+				return console.log('DEBUG:index.html(messageHandler):61 =>', message.payload);
 			default:
 				throw new Error('Unknown type: ' + message.type);
 		}

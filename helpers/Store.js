@@ -1,7 +1,6 @@
 module.exports = class Store {
-	constructor(limit = Infinity) {
+	constructor() {
 		this.store = new Map();
-		this.limit = limit;
 	}
 
 	get entries() {
@@ -14,14 +13,6 @@ module.exports = class Store {
 
 	get size() {
 		return this.store.size;
-	}
-
-	get limit() {
-		return this._limit;
-	}
-
-	set limit(value) {
-		return this._limit = value;
 	}
 
 	get(key) {
@@ -41,12 +32,13 @@ module.exports = class Store {
 	}
 
 	clear() {
-		return this.store.clear()
+		return this.store.clear();
 	}
 
-	execute(fn) {
+	apply(fn) {
+		const entries = this.entries;
 		return function () {
-			return (Array.from(this.entries)).map(([key, value]) => fn.bind(this, key, value).apply(this, arguments));
+			return (Array.from(entries)).map(([key, value]) => fn.bind(this, key, value).apply(this, arguments));
 		}.bind(this);
 	}
 };

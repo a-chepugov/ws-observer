@@ -15,7 +15,8 @@ module.exports = (server) => {
 	const Pool = require('../helpers/Pool');
 	const Room = require('../helpers/Room');
 
-	const pool = new Pool(undefined, (value, name) => name);
+	const rooms = new Room(undefined, (value, name) => name);
+	const connections = new Pool(undefined, (value, name) => name);
 
 	const wsServer = new WebSocketServer({httpServer: server});
 
@@ -25,59 +26,85 @@ module.exports = (server) => {
 
 	wsServer.on('request', function (request) {
 		const connection = request.accept('', request.origin);
-		const {pathname: id} = request.resourceURL;
+		connection.id = connection.id ? connection.id : Math.ceil(Math.random() * Number.MAX_SAFE_INTEGER);
 
-		function onCreateRequest({secret} = {}) {
-			if (pool.has(id)) {
-				throw new Error('Room already exist');
-			} else {
-				const room = new Room(id, {secret});
-				pool.set(id, room);
-				return room;
+		function createRoom({id, secret}) {
+			try {
+				const room = new Room(secret);
+				rooms.set(id, room);
+				return true;
+			} catch (error) {
+				return error.toString();
 			}
 		}
 
-		function onEnterRequest({id, secret, connection: {id: connectionId} = {}} = {}, connection) {
-			console.log('DEBUG:ws.js(onEnterRequest):41 =>', connectionId);
-			const room = pool.get(id);
-			room.set(connectionId, connection, secret);
-			return room;
+		function enterRoom({id, secret} = {}) {
+			try {
+				const room = rooms.get(id);
+				room.enter(connection.id, connection, secret);
+				return true;
+			} catch (error) {
+				return error.toString();
+			}
 		}
 
-		function messageHandler(message, connection) {
+		function messageHandler(message) {
 			switch (message.type) {
-				case 'room.exist': {
-					return send.call(connection, {type: 'room.exist', payload: pool.has(message.payload.id)});
+				case '?room.exist': {
+					return send.call(connection, {type: '!room.exist', payload: rooms.has(message.payload.room.id)});
 				}
-				case 'room.create': {
-					const room = onCreateRequest(message.payload);
-					return send.call(connection, {type: 'room.created', payload: {id: room.id, secret: room.secret},});
+				case '?room.create': {
+					return send.call(connection, {type: '!room.create', payload: createRoom(message.payload.room)});
 				}
-				case 'room.enter': {
-					const room = onEnterRequest(message.payload, connection);
-					room.execute((k, v, payload) => send.call(v, {type: 'room.broadcasted', payload}))(1231234)
-
-					return send.call(connection, {type: 'room.entered', payload: {id: room.id, secret: room.secret}});
+				case '?room.enter': {
+					return send.call(connection, {type: '!room.enter', payload: enterRoom(message.payload.room)});
 				}
-				case 'room.broadcast': {
-					console.log('DEBUG:ws.js(messageHandler):58 =>', message);
-					const room = pool.get(message.payload.id);
-					return room.execute((k, v, payload) => send.call(v, {type: 'room.broadcasted', payload}))(message.payload.message);
+				case '?room.broadcast': {
+					const room = rooms.get(message.payload.room.id);
+					return room.apply((k, v, payload) => send.call(v, {type: '!room.broadcast', payload}), message.payload.room.secret)(message.payload.message);
 				}
 				default:
 					throw new Error(`Unknown type: ${message.type}`);
 			}
 		}
 
-		connection.on('message', (message) => messageHandler(JSON.parse(convertMessage(message)), connection));
+		connection.on('message', (message) => messageHandler(JSON.parse(convertMessage(message))));
 
 		connection.on('close', () => {
 			// удаляем из комнаты и, возможно из пула
 		});
 
-		return send.call(connection, {type: 'connected', payload: {id: Math.ceil(Math.random() * Number.MAX_SAFE_INTEGER)}});
+		return send.call(connection, {type: '!connect', payload: {id: connection.id}});
 	});
 
 	return wsServer;
 };
 
+const Room = require('../helpers/Room');
+
+function decorate(Class, decorator) {
+	let q = Object.getOwnPropertyNames(Class.prototype);
+	console.log('DEBUG:ws.js(decorator):87 =>');
+	console.dir(q, {colors: true, depth: null});
+	console.log('DEBUG:ws.js(decorator):89 =>');
+	decorator(Class)
+
+	return decorator(Class);
+}
+
+function decorator(Class) {
+	console.log('DEBUG:ws.js(decorator):94 =>', Class);
+	return function (...args) {
+		console.log('DEBUG:ws.js():95 =>', ...args);
+	}
+}
+
+const RoomDecorated = decorate(Room, decorator);
+console.log('DEBUG:ws.js():97 =>');
+console.dir(RoomDecorated, {colors: true, depth: null});
+console.log('DEBUG:ws.js():102 =>');
+
+// console.log('DEBUG:ws.js():105 =====================>');
+// const roomDecorated = new RoomDecorated(1, 2, 3, 4);
+// console.log('DEBUG:ws.js(,):107 =>');
+// console.dir(roomDecorated, {colors: true, depth: null});

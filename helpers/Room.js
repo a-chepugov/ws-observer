@@ -1,10 +1,8 @@
-const Store = require('./Store');
+const Pool = require('./Pool');
 
-module.exports = class Room extends Store {
-	constructor(id = 0, {secret = '', limit} = {}) {
-		super(limit);
-		this.id = id;
-		this.timestamp = Date.now();
+module.exports = class Room extends Pool {
+	constructor(secret = '') {
+		super();
 		this.secret = secret;
 	}
 
@@ -16,25 +14,30 @@ module.exports = class Room extends Store {
 		return this._secret = value;
 	}
 
-	set(key, member, secret = '') {
-		if (secret === this.secret) {
-			if (this.has(key)) {
-				throw new Error('Key is in use:' + key)
-			} else {
-				return this.store.set(key, member);
-			}
+	authorize(secret = '') {
+		return secret === this.secret ? true : (() => {
+			throw new Error('Invalid secret: ' + secret)
+		})();
+	}
+
+	enter(key, value, secret = '') {
+		if (this.has(key)) {
+			throw new Error('Key is in use: ' + key)
 		} else {
-			throw new Error('Invalid secret');
+			return this.set(key, value, secret);
 		}
 	}
 
-	add(value) {
-		const key = this.key.apply(this, arguments);
-		if (this.has(key)) {
-			throw new Error('Key is in use:' + key)
-		} else {
-			this.set(key, value);
-		}
-		return key;
+	set(key, value, secret = '') {
+		return this.authorize(secret) ?
+			super.set(key, value) :
+			false
+	}
+
+	apply(fn, secret = '') {
+		return this.authorize(secret) ?
+			super.apply(fn) :
+			false
 	}
 };
+
