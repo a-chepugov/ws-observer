@@ -6,61 +6,117 @@
 </head>
 <body>
 <script>
-	var origin = location.origin.replace(/^http/, 'ws');
-	var socket = new WebSocket(origin);
+	const start = Date.now();
+
+	const origin = location.origin.replace(/^http/, 'ws');
+	const socket = new WebSocket(origin);
 	window.socket = socket;
 
-	const room = {id: 'bino', secret: '12ss3d'};
+	const room = {id: 'test', secret: 'slkdjfgh'};
 
-	const connection = {id: 0};
+	const connection = {id: 0, secret: 0};
 
-	function sendObject(payload) {
-		return this.send(JSON.stringify(payload));
+	function send(payload) {
+		return socket.send(JSON.stringify(payload));
 	}
 
-	function onConnect(payload) {
-		connection.id = payload.id;
+	const sendFactory = (type) => (payload, error) => {
+		console.info('DEBUG:index.html():24 =>', type, JSON.stringify(payload));
+		return send({type, payload, error: error ? error.toString() : undefined})
+	};
+
+	function onConnect(message) {
+		Object.assign(connection, message.payload);
+
+		setConnectionMeta({connection, meta: {start}});
+
 		return checkRoomExist({room});
 	}
 
-	function checkRoomExist(payload) {
-		return sendObject.call(socket, {type: '?room.exist', payload});
+	function setConnectionMeta(payload) {
+		return sendFactory('?connection.meta')(payload);
 	}
 
-	function onRoomExist(payload) {
-		return payload ? enterRoom({room, connection}) : createRoom({room});
+	function onConnectionMeta(payload) {
+		console.log('DEBUG:index.html(onConnectionMeta):41 =>', arguments);
+	}
+
+	function checkRoomExist(payload) {
+		return sendFactory('?room.exist')(payload);
+	}
+
+	function onRoomExist(message) {
+		return message.payload ? enterRoom({room, connection}) : createRoom({room, connection});
 	}
 
 	function createRoom(payload) {
-		return sendObject.call(socket, {type: '?room.create', payload});
+		return sendFactory('?room.create')(payload);
 	}
 
 	function enterRoom(payload) {
-		return sendObject.call(socket, {type: '?room.enter', payload});
+		return sendFactory('?room.enter')(payload);
 	}
 
-	function broadcast(payload) {
-		return sendObject.call(socket, {type: '?room.broadcast', payload: Object.assign({message: (new Date()).toISOString()}, payload)});
+	function onRoomEnter(message) {
+		return getRoomers({room, connection});
+	}
+
+	function onRoomNewcomer(message) {
+		return sendRoomMessage({room, connection, roomate: message.payload, message: Date.now()});
+	}
+
+	function getRoomers(payload) {
+		return sendFactory('?room.roomers')(payload);
+	}
+
+	function onRoomRoomers(payload) {
+		return broadcastInRoom({room, connection, message: Date.now()})
+	}
+
+	function broadcastInRoom(payload) {
+		return sendFactory('?room.broadcast')(payload);
+	}
+
+	function onRoomBroadcast(payload) {
+		console.log('DEBUG:index.html(onRoomBroadcast):81 =>', arguments);
+	}
+
+	function sendRoomMessage(payload) {
+		return sendFactory('?room.message')(payload);
+	}
+
+	function onRoomMessage(payload) {
+		console.log('DEBUG:index.html(onRoomMessage):89 =>', arguments);
+	}
+
+	function onRoomLeave(payload) {
+		console.log('DEBUG:index.html(onRoomLeave):93 =>', arguments);
 	}
 
 	function messageHandler(message) {
 		switch (message.type) {
-			case '!connect':
-				// return broadcast({room})
-				return onConnect(message.payload);
+			case '!connection':
+				return onConnect(message);
+			case '!connection.meta':
+				return onConnectionMeta(message);
 			case '!room.exist':
-				return onRoomExist(message.payload);
+				return onRoomExist(message);
 			case '!room.create':
-			// 	// @todo Абшика тута
-				console.log('DEBUG:index.html(messageHandler):53 =>', message);
-				return enterRoom(message.payload);
+				return onRoomExist(message);
 			case '!room.enter':
-				console.log('DEBUG:index.html(messageHandler):55 =>', message);
-				return message.payload === true ?
-					broadcast(Object.assign({room}, {message: (new Date()).toISOString()})) :
-					console.error(message.payload);
+				return onRoomEnter(message);
 			case '!room.broadcast':
-				return console.log('DEBUG:index.html(messageHandler):61 =>', message.payload);
+				return onRoomBroadcast(message);
+			case '!room.roomers':
+				return onRoomRoomers(message);
+			case '!room.creator':
+				return console.info(message);
+			case '!room.newcomer':
+				return onRoomNewcomer(message);
+			case '!room.leaving':
+				return onRoomLeave(message);
+			case '!room.message':
+				return onRoomMessage(message);
 			default:
 				throw new Error('Unknown type: ' + message.type);
 		}

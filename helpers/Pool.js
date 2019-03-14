@@ -1,6 +1,6 @@
 const Store = require('./Store');
 
-module.exports = class Pool extends Store {
+module.exports = class extends Store {
 	constructor(limit = Infinity) {
 		super();
 		this.limit = limit;

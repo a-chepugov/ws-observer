@@ -1,5 +1,10 @@
+const Pool = require('../helpers/Pool');
+const Emitter = require('../helpers/Emitter');
+const Guarded = require('../helpers/Guarded');
+const Extended = require('../helpers/Extended');
+const WebSocketServer = require('websocket').server;
+
 module.exports = (server) => {
-	const WebSocketServer = require('websocket').server;
 
 	function convertMessage(message) {
 		switch (message.type) {
@@ -12,99 +17,208 @@ module.exports = (server) => {
 		}
 	}
 
-	const Pool = require('../helpers/Pool');
-	const Room = require('../helpers/Room');
+	const sendFactory = (type) => (connection) => (payload, error) => {
+		console.log('DEBUG:ws.js():16 =>', connection.id, type);
+		return connection.sendUTF(JSON.stringify({type, payload, error: error ? error.toString() : undefined}))
+	};
 
-	const rooms = new Room(undefined, (value, name) => name);
-	const connections = new Pool(undefined, (value, name) => name);
+	function onMessage(connection, msg) {
+		const message = JSON.parse(convertMessage(msg));
+		try {
+			hub.emit(message.type)(message, connection);
+		} catch (error) {
+			console.error(error);
+		}
+	}
+
+	class ExtendedMeta extends Extended {
+		constructor(prototype, assign) {
+			super(prototype, assign);
+			Object.defineProperty(this, 'meta', {
+				configurable: false,
+				get: () => this.private.meta
+			})
+		}
+	}
+
+	const createRoomInstance = Guarded(ExtendedMeta)(['private', 'get', 'set', 'del', 'values', 'entries', 'connection']);
+	const createConnectionInstance = Guarded(ExtendedMeta)(['private']);
+
+	const hub = new Extended(new Emitter(), {storage: {rooms: new Pool(), connections: new Pool()}});
+
+	hub
+		.on('?connection', function (connection, message) {
+			const {id, secret} = message;
+			try {
+				this.storage.connections.set(message.id, connection);
+				sendFactory('!connection')(connection)(message);
+			} catch (error) {
+				sendFactory('!connection')(connection)(message, error);
+			}
+		}.bind(hub))
+
+		.on('?connection.meta', function (message, connection) {
+			try {
+				const connectionUnwrapped = connection(message.payload.connection.secret);
+				connectionUnwrapped.private.meta = message.payload.meta;
+				sendFactory('!connection.meta')(connection)(connectionUnwrapped.meta);
+			} catch (error) {
+				sendFactory('!connection.meta')(connection)(message, error);
+			}
+		}.bind(hub))
+
+		.on('?room.exist', function (message, connection, cb) {
+			try {
+				const exist = this.storage.rooms.has(message.payload.room.id);
+				sendFactory('!room.exist')(connection)(exist);
+			} catch (error) {
+				sendFactory('!room.exist')(connection)(message, error);
+			}
+		}.bind(hub))
+
+		.on('?room.create', function (message, connection) {
+			try {
+				const room = createRoom(message.payload.room, this.storage.rooms, connection);
+				sendFactory('!room.create')(connection)(room(message.payload.room.secret));
+			} catch (error) {
+				sendFactory('!room.create')(connection)(message, error);
+			}
+		}.bind(hub))
+
+		.on('?room.enter', function (message, connection) {
+			try {
+				const {payload: {room: {id, secret}}} = message;
+				const room = this.storage.rooms.get(id);
+				room(secret)
+					.apply((k, v, payload) =>
+						connection !== v ?
+							sendFactory('!room.newcomer')(v)({id: payload.id, meta: payload.meta}) :
+							undefined
+					)(connection);
+
+				const result = enterRoom(room, message.payload, connection);
+				sendFactory('!room.enter')(connection)(result);
+			} catch (error) {
+				sendFactory('!room.enter')(connection)(message, error);
+			}
+		}.bind(hub))
+
+		.on('?room.message', function (message, connection) {
+			try {
+				const {payload: {room: {id, secret}, roomate}} = message;
+				const roomUnwrapped = this.storage.rooms.get(id)(secret);
+				const connectionUnwrapped = connection(message.payload.connection.secret);
+				if (connectionUnwrapped.id === message.payload.connection.id) {
+					const ConnectionRoomate = roomUnwrapped.get(roomate.id);
+					sendFactory('!room.message')(ConnectionRoomate)({
+						message: message.payload.message,
+						roomate: {id: connection.id}
+					});
+				} else {
+					throw new Error('Invalid connection id: ' + message.payload.connection.id)
+				}
+			} catch (error) {
+				sendFactory('!room.message')(connection)(message, error);
+			}
+		}.bind(hub))
+
+		.on('?room.broadcast', function (message, connection) {
+			try {
+				const {payload: {room: {id, secret}}} = message;
+				const room = this.storage.rooms.get(id);
+				return room(secret)
+					.apply((k, v, payload) =>
+						connection !== v ?
+							sendFactory('!room.broadcast')(v)(payload) :
+							undefined
+					)(message);
+			} catch (error) {
+				sendFactory('!room.broadcast')(connection)(message, error);
+			}
+		}.bind(hub))
+
+		.on('?room.roomers', function (message, connection) {
+			try {
+				const {payload: {room: {id, secret}}} = message;
+				const room = this.storage.rooms.get(id);
+				let roomers = Array.from(room(secret).values).filter((item) => item !== connection).map(({id, meta}) => ({id, meta}));
+				sendFactory('!room.roomers')(connection)(roomers);
+			} catch (error) {
+				sendFactory('!room.roomers')(connection)(message, error);
+			}
+		}.bind(hub));
+
+	function createRoom({id, secret} = {}, rooms, connection) {
+		if (id && !rooms.has(id)) {
+			const room = createRoomInstance(secret)(new Pool(), {id, private: {creator: connection, connections: new Pool()}});
+			rooms.set(id, room);
+			return room;
+		} else {
+			throw new Error('Room is already created:' + id);
+		}
+	}
+
+	function enterRoom(room, payload, connection) {
+		if (room) {
+			const roomUnwrapped = room(payload.room.secret);
+			if (roomUnwrapped.has(payload.connection.id)) {
+				return true;
+			} else {
+				const connectionUnwrapped = connection(payload.connection.secret);
+				connectionUnwrapped.private.rooms.set(payload.room.id, room);
+				connectionUnwrapped.private.roomsSecrets.set(payload.room.id, payload.room.secret);
+				roomUnwrapped.set(connection.id, connection);
+				return true;
+			}
+		} else {
+			throw new Error('Room is not a: ' + payload.room.id)
+		}
+	}
+
+	function leaveRoom(room, roomSecret, connection, connectionSecret) {
+		if (room.id) {
+			const roomUnwrapped = room(roomSecret);
+			roomUnwrapped.del(connection.id);
+			connection(connectionSecret).private.rooms.del(room.id);
+
+			roomUnwrapped
+				.apply((k, v, payload) =>
+					payload !== v ?
+						sendFactory('!room.leaving')(v)({id: payload.id, meta: payload.meta}) :
+						undefined
+				)(connection);
+			return true;
+		} else {
+			throw new Error('Invalid room id: ' + room.id)
+		}
+	}
 
 	const wsServer = new WebSocketServer({httpServer: server});
 
-	function send(payload) {
-		return this.sendUTF(JSON.stringify(payload))
-	}
-
 	wsServer.on('request', function (request) {
 		const connection = request.accept('', request.origin);
-		connection.id = connection.id ? connection.id : Math.ceil(Math.random() * Number.MAX_SAFE_INTEGER);
 
-		function createRoom({id, secret}) {
-			try {
-				const room = new Room(secret);
-				rooms.set(id, room);
-				return true;
-			} catch (error) {
-				return error.toString();
-			}
-		}
+		const secret = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+		const id = connection.id ? connection.id : Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
 
-		function enterRoom({id, secret} = {}) {
-			try {
-				const room = rooms.get(id);
-				room.enter(connection.id, connection, secret);
-				return true;
-			} catch (error) {
-				return error.toString();
-			}
-		}
+		const connectionGuarded = createConnectionInstance(secret)(connection, {id, private: {rooms: new Pool(), roomsSecrets: new Pool()}});
 
-		function messageHandler(message) {
-			switch (message.type) {
-				case '?room.exist': {
-					return send.call(connection, {type: '!room.exist', payload: rooms.has(message.payload.room.id)});
-				}
-				case '?room.create': {
-					return send.call(connection, {type: '!room.create', payload: createRoom(message.payload.room)});
-				}
-				case '?room.enter': {
-					return send.call(connection, {type: '!room.enter', payload: enterRoom(message.payload.room)});
-				}
-				case '?room.broadcast': {
-					const room = rooms.get(message.payload.room.id);
-					return room.apply((k, v, payload) => send.call(v, {type: '!room.broadcast', payload}), message.payload.room.secret)(message.payload.message);
-				}
-				default:
-					throw new Error(`Unknown type: ${message.type}`);
-			}
-		}
-
-		connection.on('message', (message) => messageHandler(JSON.parse(convertMessage(message))));
+		connection.on('message', onMessage.bind(this, connectionGuarded));
 
 		connection.on('close', () => {
-			// удаляем из комнаты и, возможно из пула
+
+			hub.storage.connections.del(id);
+			const connectionUnwrapped = connectionGuarded(secret);
+
+			Array.from(connectionUnwrapped.private.rooms.values).forEach((item) => {
+				const roomSecret = connectionUnwrapped.private.roomsSecrets.get(item.id);
+				leaveRoom(item, roomSecret, connectionGuarded, secret);
+			});
+
 		});
 
-		return send.call(connection, {type: '!connect', payload: {id: connection.id}});
+		return hub.emit('?connection')(connectionGuarded, {id, secret});
 	});
 
 	return wsServer;
 };
-
-const Room = require('../helpers/Room');
-
-function decorate(Class, decorator) {
-	let q = Object.getOwnPropertyNames(Class.prototype);
-	console.log('DEBUG:ws.js(decorator):87 =>');
-	console.dir(q, {colors: true, depth: null});
-	console.log('DEBUG:ws.js(decorator):89 =>');
-	decorator(Class)
-
-	return decorator(Class);
-}
-
-function decorator(Class) {
-	console.log('DEBUG:ws.js(decorator):94 =>', Class);
-	return function (...args) {
-		console.log('DEBUG:ws.js():95 =>', ...args);
-	}
-}
-
-const RoomDecorated = decorate(Room, decorator);
-console.log('DEBUG:ws.js():97 =>');
-console.dir(RoomDecorated, {colors: true, depth: null});
-console.log('DEBUG:ws.js():102 =>');
-
-// console.log('DEBUG:ws.js():105 =====================>');
-// const roomDecorated = new RoomDecorated(1, 2, 3, 4);
-// console.log('DEBUG:ws.js(,):107 =>');
-// console.dir(roomDecorated, {colors: true, depth: null});

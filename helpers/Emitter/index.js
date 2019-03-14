@@ -2,15 +2,15 @@ const Observer = require('./Observer');
 
 module.exports = class Emitter {
 	constructor() {
-		this.storage = new Map();
+		this.store = new Map();
 	}
 
 	event(event) {
-		if (this.storage.has(event)) {
-			return this.storage.get(event);
+		if (this.store.has(event)) {
+			return this.store.get(event);
 		} else {
 			const _event = new Observer();
-			this.storage.set(event, _event);
+			this.store.set(event, _event);
 			return _event;
 		}
 	}
@@ -18,14 +18,16 @@ module.exports = class Emitter {
 	on(event, handler) {
 		const _event = this.event(event);
 		_event.attach(handler);
+		return this;
 	}
 
 	off(event, handler) {
 		const _event = this.event(event);
 		_event.detach(handler);
 		if (_event.size === 0) {
-			this.storage.delete(_event);
+			this.store.delete(_event);
 		}
+		return this;
 	}
 
 	once(event, handler) {
@@ -36,13 +38,15 @@ module.exports = class Emitter {
 		};
 
 		this.on(event, wrapper);
+		return this;
 	}
 
 	emit(event) {
 		const _event = this.event(event);
 		return function () {
 			return _event.notify.apply(event, arguments);
-		}
+		};
+		return this;
 	}
 
 	size(event) {

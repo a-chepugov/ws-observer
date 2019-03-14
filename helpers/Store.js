@@ -39,6 +39,6 @@ module.exports = class Store {
 		const entries = this.entries;
 		return function () {
 			return (Array.from(entries)).map(([key, value]) => fn.bind(this, key, value).apply(this, arguments));
-		}.bind(this);
+		};
 	}
 };
